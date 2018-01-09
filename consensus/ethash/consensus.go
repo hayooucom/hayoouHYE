@@ -364,7 +364,7 @@ func calcDifficultyByzantium(time uint64, parent *types.Header) *big.Int {
 	if periodCount.Cmp(big1) > 0 {
 		y.Sub(periodCount, big2)
 		y.Exp(big2, y, nil)
-		x.Add(x, y)
+		//x.Add(x, y)
 	}
 	return x
 }
@@ -413,7 +413,7 @@ func calcDifficultyHomestead(time uint64, parent *types.Header) *big.Int {
 	if periodCount.Cmp(big1) > 0 {
 		y.Sub(periodCount, big2)
 		y.Exp(big2, y, nil)
-		x.Add(x, y)
+		//x.Add(x, y)
 	}
 	return x
 }
@@ -445,7 +445,7 @@ func calcDifficultyFrontier(time uint64, parent *types.Header) *big.Int {
 		// diff = diff + 2^(periodCount - 2)
 		expDiff := periodCount.Sub(periodCount, big2)
 		expDiff.Exp(big2, expDiff, nil)
-		diff.Add(diff, expDiff)
+		//diff.Add(diff, expDiff)
 		diff = math.BigMax(diff, params.MinimumDifficulty)
 	}
 	return diff
