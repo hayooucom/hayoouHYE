@@ -14,7 +14,7 @@ ethdir="$workspace/src/github.com/ethereum"
 if [ ! -L "$ethdir/go-ethereum" ]; then
     mkdir -p "$ethdir"
     cd "$ethdir"
-    ln -s ../../../../../. go-ethereum
+    #ln -s ../../../../../. go-ethereum
     cd "$root"
 fi
 
