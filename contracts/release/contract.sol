@@ -14,6 +14,8 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
+pragma solidity ^0.4.18;
+
 // ReleaseOracle is an Ethereum contract to store the current and previous
 // versions of the go-ethereum implementation. Its goal is to allow Geth to
 // check for new releases automatically without the need to consult a central
@@ -58,7 +60,7 @@ contract ReleaseOracle {
   // isSigner is a modifier to authorize contract transactions.
   modifier isSigner() {
     if (authorised[msg.sender]) {
-      _
+      _;
     }
   }
 
@@ -77,7 +79,7 @@ contract ReleaseOracle {
     }
   }
 
-  // signers is an accessor method to retrieve all te signers (public accessor
+  // signers is an accessor method to retrieve all the signers (public accessor
   // generates an indexed one, not a retrieve-all version).
   function signers() constant returns(address[]) {
     return voters;

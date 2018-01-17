@@ -16,7 +16,12 @@
 
 package dashboard
 
-//go:generate go-bindata -nometadata -o assets.go -prefix assets -pkg dashboard assets/public/...
+//go:generate npm --prefix ./assets install
+//go:generate ./assets/node_modules/.bin/webpack --config ./assets/webpack.config.js --context ./assets
+//go:generate go-bindata -nometadata -o assets.go -prefix assets -nocompress -pkg dashboard assets/dashboard.html assets/bundle.js
+//go:generate sh -c "sed 's#var _bundleJs#//nolint:misspell\\\n&#' assets.go > assets.go.tmp && mv assets.go.tmp assets.go"
+//go:generate sh -c "sed 's#var _dashboardHtml#//nolint:misspell\\\n&#' assets.go > assets.go.tmp && mv assets.go.tmp assets.go"
+//go:generate gofmt -w -s assets.go
 
 import (
 	"fmt"
@@ -30,6 +35,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/rcrowley/go-metrics"
 	"golang.org/x/net/websocket"
@@ -40,7 +46,7 @@ const (
 	trafficSampleLimit = 200 // Maximum number of traffic data samples
 )
 
-var nextId uint32 // Next connection id
+var nextID uint32 // Next connection id
 
 // Dashboard contains the dashboard internals.
 type Dashboard struct {
@@ -48,46 +54,32 @@ type Dashboard struct {
 
 	listener net.Listener
 	conns    map[uint32]*client // Currently live websocket connections
-	charts   charts             // The collected data samples to plot
-	lock     sync.RWMutex       // Lock protecting the dashboard's internals
+	charts   *HomeMessage
+	commit   string
+	lock     sync.RWMutex // Lock protecting the dashboard's internals
 
 	quit chan chan error // Channel used for graceful exit
 	wg   sync.WaitGroup
 }
 
-// message embraces the data samples of a client message.
-type message struct {
-	History *charts     `json:"history,omitempty"` // Past data samples
-	Memory  *chartEntry `json:"memory,omitempty"`  // One memory sample
-	Traffic *chartEntry `json:"traffic,omitempty"` // One traffic sample
-	Log     string      `json:"log,omitempty"`     // One log
-}
-
 // client represents active websocket connection with a remote browser.
 type client struct {
 	conn   *websocket.Conn // Particular live websocket connection
-	msg    chan message    // Message queue for the update messages
+	msg    chan Message    // Message queue for the update messages
 	logger log.Logger      // Logger for the particular live websocket connection
 }
 
-// charts contains the collected data samples.
-type charts struct {
-	Memory  []*chartEntry `json:"memorySamples,omitempty"`
-	Traffic []*chartEntry `json:"trafficSamples,omitempty"`
-}
-
-// chartEntry represents one data sample
-type chartEntry struct {
-	Time  time.Time `json:"time,omitempty"`
-	Value float64   `json:"value,omitempty"`
-}
-
 // New creates a new dashboard instance with the given configuration.
-func New(config *Config) (*Dashboard, error) {
+func New(config *Config, commit string) (*Dashboard, error) {
 	return &Dashboard{
 		conns:  make(map[uint32]*client),
 		config: config,
 		quit:   make(chan chan error),
+		charts: &HomeMessage{
+			Memory:  ChartEntries{},
+			Traffic: ChartEntries{},
+		},
+		commit: commit,
 	}, nil
 }
 
@@ -99,6 +91,8 @@ func (db *Dashboard) APIs() []rpc.API { return nil }
 
 // Start implements node.Service, starting the data collection thread and the listening server of the dashboard.
 func (db *Dashboard) Start(server *p2p.Server) error {
+	log.Info("Starting dashboard")
+
 	db.wg.Add(2)
 	go db.collectData()
 	go db.collectLogs() // In case of removing this line change 2 back to 1 in wg.Add.
@@ -172,7 +166,7 @@ func (db *Dashboard) webHandler(w http.ResponseWriter, r *http.Request) {
 		w.Write(blob)
 		return
 	}
-	blob, err := Asset(filepath.Join("public", path))
+	blob, err := Asset(path[1:])
 	if err != nil {
 		log.Warn("Failed to load the asset", "path", path, "err", err)
 		http.Error(w, "not found", http.StatusNotFound)
@@ -183,13 +177,13 @@ func (db *Dashboard) webHandler(w http.ResponseWriter, r *http.Request) {
 
 // apiHandler handles requests for the dashboard.
 func (db *Dashboard) apiHandler(conn *websocket.Conn) {
-	id := atomic.AddUint32(&nextId, 1)
+	id := atomic.AddUint32(&nextID, 1)
 	client := &client{
 		conn:   conn,
-		msg:    make(chan message, 128),
+		msg:    make(chan Message, 128),
 		logger: log.New("id", id),
 	}
-	done := make(chan struct{}) // Buffered channel as sender may exit early
+	done := make(chan struct{})
 
 	// Start listening for messages to send.
 	db.wg.Add(1)
@@ -209,9 +203,21 @@ func (db *Dashboard) apiHandler(conn *websocket.Conn) {
 			}
 		}
 	}()
+
+	versionMeta := ""
+	if len(params.VersionMeta) > 0 {
+		versionMeta = fmt.Sprintf(" (%s)", params.VersionMeta)
+	}
 	// Send the past data.
-	client.msg <- message{
-		History: &db.charts,
+	client.msg <- Message{
+		General: &GeneralMessage{
+			Version: fmt.Sprintf("v%d.%d.%d%s", params.VersionMajor, params.VersionMinor, params.VersionPatch, versionMeta),
+			Commit:  db.commit,
+		},
+		Home: &HomeMessage{
+			Memory:  db.charts.Memory,
+			Traffic: db.charts.Traffic,
+		},
 	}
 	// Start tracking the connection and drop at connection loss.
 	db.lock.Lock()
@@ -245,15 +251,14 @@ func (db *Dashboard) collectData() {
 			inboundTraffic := metrics.DefaultRegistry.Get("p2p/InboundTraffic").(metrics.Meter).Rate1()
 			memoryInUse := metrics.DefaultRegistry.Get("system/memory/inuse").(metrics.Meter).Rate1()
 			now := time.Now()
-			memory := &chartEntry{
+			memory := &ChartEntry{
 				Time:  now,
 				Value: memoryInUse,
 			}
-			traffic := &chartEntry{
+			traffic := &ChartEntry{
 				Time:  now,
 				Value: inboundTraffic,
 			}
-			// Remove the first elements in case the samples' amount exceeds the limit.
 			first := 0
 			if len(db.charts.Memory) == memorySampleLimit {
 				first = 1
@@ -265,9 +270,11 @@ func (db *Dashboard) collectData() {
 			}
 			db.charts.Traffic = append(db.charts.Traffic[first:], traffic)
 
-			db.sendToAll(&message{
-				Memory:  memory,
-				Traffic: traffic,
+			db.sendToAll(&Message{
+				Home: &HomeMessage{
+					Memory:  ChartEntries{memory},
+					Traffic: ChartEntries{traffic},
+				},
 			})
 		}
 	}
@@ -277,6 +284,7 @@ func (db *Dashboard) collectData() {
 func (db *Dashboard) collectLogs() {
 	defer db.wg.Done()
 
+	id := 1
 	// TODO (kurkomisi): log collection comes here.
 	for {
 		select {
@@ -284,15 +292,18 @@ func (db *Dashboard) collectLogs() {
 			errc <- nil
 			return
 		case <-time.After(db.config.Refresh / 2):
-			db.sendToAll(&message{
-				Log: "This is a fake log.",
+			db.sendToAll(&Message{
+				Logs: &LogsMessage{
+					Log: []string{fmt.Sprintf("%-4d: This is a fake log.", id)},
+				},
 			})
+			id++
 		}
 	}
 }
 
 // sendToAll sends the given message to the active dashboards.
-func (db *Dashboard) sendToAll(msg *message) {
+func (db *Dashboard) sendToAll(msg *Message) {
 	db.lock.Lock()
 	for _, c := range db.conns {
 		select {
