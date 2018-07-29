@@ -20,3 +20,6 @@
 
 挖矿软件：
 目前内部提供交易计算，暂不提供接口
+
+哈友社区区块链白皮书.pdf ： 
+[hayoou.com/xkkm](http://hayoou.com/xkkm)
