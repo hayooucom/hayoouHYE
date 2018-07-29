@@ -16,4 +16,7 @@
 
 
 社区资讯频道：
-[news.hayoou.com]http://f.hayoou.com/news)
+[news.hayoou.com](http://f.hayoou.com/news)
+
+挖矿软件：
+目前内部提供交易计算，暂不提供接口
